@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         VK images
 // @namespace    http://tampermonkey.net/
-// @version      5.2
-// @description  Архивация фото и текста из диалогов ВК + альбомы + анализ + выбор диапазона + параллельная загрузка
+// @version      6.2
+// @description  Архивация фото, текста и видео из диалогов ВК + альбомы + анализ + выбор диапазона + разбивка на несколько ZIP-архивов + выбор видео для скачивания + тёмная тема
 // @author       UncleWood
 // @match        *://vk.com/im*
 // @match        *://*.vk.com/im*
@@ -23,22 +23,76 @@
     'use strict';
 
     const TOKEN_KEY = 'vk_access_token_manual';
-    let accessToken = GM_getValue(TOKEN_KEY, '');
+    const DARK_THEME_KEY = 'vk_dark_theme_enabled';
 
+    let accessToken = GM_getValue(TOKEN_KEY, '');
+    let darkThemeEnabled = GM_getValue(DARK_THEME_KEY, false);
+
+    // Добавляем CSS с поддержкой переменных и тёмной темы
     GM_addStyle(`
-        #vk-archive-menu {
+        :root {
+            --vk-bg: #ffffff;
+            --vk-text: #000000;
+            --vk-border: #cccccc;
+            --vk-input-bg: #ffffff;
+            --vk-log-bg: #f5f5f5;
+            --vk-hover-bg: #f0f0f0;
+            --vk-btn-bg: #4a76a8;
+            --vk-btn-hover: #3a5e87;
+            --vk-shadow: rgba(0,0,0,0.2);
+            --vk-overlay: rgba(0,0,0,0.5);
+        }
+
+        .vk-dark-theme {
+            --vk-bg: #2d2d2d;
+            --vk-text: #e0e0e0;
+            --vk-border: #555555;
+            --vk-input-bg: #444444;
+            --vk-log-bg: #1e1e1e;
+            --vk-hover-bg: #3a3a3a;
+            --vk-btn-bg: #3a5e87;
+            --vk-btn-hover: #2a4a6a;
+            --vk-shadow: rgba(0,0,0,0.6);
+            --vk-overlay: rgba(0,0,0,0.7);
+        }
+
+        #vk-archive-toggle {
             position: fixed;
-            top: 60px;
+            top: 70px;
+            right: 20px;
+            width: 50px;
+            height: 50px;
+            background: var(--vk-btn-bg);
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            z-index: 10001;
+            box-shadow: 0 2px 10px var(--vk-shadow);
+            font-size: 24px;
+            transition: transform 0.2s;
+        }
+        #vk-archive-toggle:hover {
+            transform: scale(1.1);
+            background: var(--vk-btn-hover);
+        }
+
+        #vk-archive-menu {
+            display: none;
+            position: fixed;
+            top: 130px;
             right: 20px;
             width: 420px;
-            background: #fff;
-            border: 1px solid #ccc;
+            background: var(--vk-bg);
+            border: 1px solid var(--vk-border);
             border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            box-shadow: 0 2px 10px var(--vk-shadow);
             padding: 15px;
             z-index: 10000;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            color: #000;
+            color: var(--vk-text);
             max-height: 90vh;
             overflow-y: auto;
         }
@@ -46,12 +100,13 @@
             margin: 0 0 10px;
             font-size: 16px;
             font-weight: 600;
-            border-bottom: 1px solid #eee;
+            border-bottom: 1px solid var(--vk-border);
             padding-bottom: 5px;
+            color: var(--vk-text);
         }
         #vk-archive-menu .section {
             margin-bottom: 20px;
-            border-bottom: 1px solid #eee;
+            border-bottom: 1px solid var(--vk-border);
             padding-bottom: 10px;
         }
         #vk-archive-menu .field {
@@ -62,16 +117,20 @@
             font-size: 13px;
             font-weight: 500;
             margin-bottom: 4px;
+            color: var(--vk-text);
         }
         #vk-archive-menu input[type="text"],
         #vk-archive-menu input[type="password"],
-        #vk-archive-menu input[type="number"] {
+        #vk-archive-menu input[type="number"],
+        #vk-archive-menu select {
             width: 100%;
             padding: 8px;
-            border: 1px solid #ccc;
+            border: 1px solid var(--vk-border);
             border-radius: 4px;
             box-sizing: border-box;
             font-size: 13px;
+            background: var(--vk-input-bg);
+            color: var(--vk-text);
         }
         #vk-archive-menu .checkbox-group {
             margin: 8px 0;
@@ -80,9 +139,10 @@
             display: inline-block;
             margin-right: 15px;
             font-weight: normal;
+            color: var(--vk-text);
         }
         #vk-archive-menu button {
-            background: #4a76a8;
+            background: var(--vk-btn-bg);
             color: white;
             border: none;
             padding: 8px 16px;
@@ -93,23 +153,24 @@
             margin-bottom: 5px;
         }
         #vk-archive-menu button:hover {
-            background: #3a5e87;
+            background: var(--vk-btn-hover);
         }
         #vk-archive-menu .token-help {
             font-size: 12px;
             margin: 4px 0 8px;
-            color: #555;
+            color: var(--vk-text);
+            opacity: 0.8;
         }
         #vk-archive-menu .token-help a {
-            color: #4a76a8;
+            color: var(--vk-btn-bg);
             text-decoration: none;
         }
         #vk-archive-menu .token-help a:hover {
             text-decoration: underline;
         }
         #vk-archive-menu #vk-log {
-            background: #f5f5f5;
-            border: 1px solid #ddd;
+            background: var(--vk-log-bg);
+            border: 1px solid var(--vk-border);
             border-radius: 4px;
             padding: 8px;
             height: 150px;
@@ -118,11 +179,13 @@
             font-family: monospace;
             margin-top: 10px;
             white-space: pre-wrap;
+            color: var(--vk-text);
         }
         #vk-archive-menu .progress {
             font-size: 12px;
             margin-top: 8px;
             font-weight: 500;
+            color: var(--vk-text);
         }
         #vk-archive-menu .token-status {
             font-size: 13px;
@@ -141,21 +204,235 @@
         #vk-archive-menu .range-fields input {
             flex: 1;
         }
+        #vk-archive-close {
+            float: right;
+            cursor: pointer;
+            font-size: 18px;
+            font-weight: bold;
+            color: var(--vk-text);
+            opacity: 0.6;
+            margin-top: -5px;
+        }
+        #vk-archive-close:hover {
+            opacity: 1;
+        }
+        #vk-video-quality {
+            width: 100%;
+            padding: 6px;
+            border-radius: 4px;
+            border: 1px solid var(--vk-border);
+            background: var(--vk-input-bg);
+            color: var(--vk-text);
+        }
+
+        /* Стили для диалога выбора видео */
+        #vk-video-selection-overlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: var(--vk-overlay);
+            z-index: 10002;
+            display: none;
+            justify-content: center;
+            align-items: center;
+        }
+        #vk-video-selection-dialog {
+            background: var(--vk-bg);
+            border-radius: 8px;
+            padding: 20px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 5px 30px var(--vk-shadow);
+            color: var(--vk-text);
+        }
+        #vk-video-selection-dialog h3 {
+            margin-top: 0;
+            border-bottom: 1px solid var(--vk-border);
+            padding-bottom: 10px;
+            color: var(--vk-text);
+        }
+        #vk-video-list {
+            flex: 1;
+            overflow-y: auto;
+            margin: 10px 0;
+            padding-right: 5px;
+        }
+        #vk-video-list .video-item {
+            display: flex;
+            align-items: center;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--vk-border);
+        }
+        #vk-video-list .video-item input[type="checkbox"] {
+            margin-right: 10px;
+            flex-shrink: 0;
+        }
+        #vk-video-list .video-item label {
+            font-size: 13px;
+            cursor: pointer;
+            word-break: break-word;
+            color: var(--vk-text);
+        }
+        #vk-video-selection-dialog .actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            padding-top: 10px;
+            border-top: 1px solid var(--vk-border);
+        }
+        #vk-video-selection-dialog .actions button {
+            padding: 8px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        #vk-video-selection-dialog .actions .btn-primary {
+            background: var(--vk-btn-bg);
+            color: white;
+        }
+        #vk-video-selection-dialog .actions .btn-primary:hover {
+            background: var(--vk-btn-hover);
+        }
+        #vk-video-selection-dialog .actions .btn-secondary {
+            background: var(--vk-border);
+            color: var(--vk-text);
+        }
+        #vk-video-selection-dialog .actions .btn-secondary:hover {
+            background: var(--vk-hover-bg);
+        }
+        .select-all {
+            margin-bottom: 8px;
+        }
+        .select-all label {
+            font-weight: normal;
+            font-size: 13px;
+            cursor: pointer;
+            color: var(--vk-text);
+        }
+        .theme-toggle {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 5px 0;
+        }
+        .theme-toggle label {
+            font-weight: normal;
+            cursor: pointer;
+            color: var(--vk-text);
+        }
     `);
+
+    // Добавляем оверлей для выбора видео
+    const selectionHTML = `
+        <div id="vk-video-selection-overlay">
+            <div id="vk-video-selection-dialog">
+                <h3>Выберите видео для скачивания</h3>
+                <div class="select-all">
+                    <label><input type="checkbox" id="vk-select-all-videos" /> Выбрать все</label>
+                </div>
+                <div id="vk-video-list"></div>
+                <div class="actions">
+                    <button class="btn-secondary" id="vk-video-cancel">Отмена</button>
+                    <button class="btn-primary" id="vk-video-download-selected">Скачать выбранные</button>
+                </div>
+            </div>
+        </div>
+    `;
+    $('body').append(selectionHTML);
+
+    const $overlay = $('#vk-video-selection-overlay');
+    const $videoList = $('#vk-video-list');
+    const $selectAll = $('#vk-select-all-videos');
+    const $downloadSelected = $('#vk-video-download-selected');
+    const $cancelBtn = $('#vk-video-cancel');
+
+    // Функция показа диалога с видео
+    function showVideoSelectionDialog(videos, quality) {
+        return new Promise((resolve) => {
+            // Очищаем список
+            $videoList.empty();
+            // Добавляем элементы
+            videos.forEach((video, index) => {
+                const title = video.title || `Видео #${video.id}`;
+                const div = $('<div class="video-item"></div>');
+                const checkbox = $('<input type="checkbox" data-index="' + index + '" />');
+                const label = $('<label></label>').text(title);
+                div.append(checkbox, label);
+                $videoList.append(div);
+            });
+
+            // Событие "Выбрать все"
+            $selectAll.prop('checked', false);
+            $selectAll.off('change').on('change', function() {
+                const checked = $(this).prop('checked');
+                $videoList.find('input[type="checkbox"]').prop('checked', checked);
+            });
+
+            // Отмена
+            $cancelBtn.off('click').on('click', function() {
+                $overlay.hide();
+                resolve(null); // отмена
+            });
+
+            // Скачать выбранные
+            $downloadSelected.off('click').on('click', function() {
+                const selected = [];
+                $videoList.find('input[type="checkbox"]:checked').each(function() {
+                    const idx = parseInt($(this).data('index'));
+                    selected.push(videos[idx]);
+                });
+                $overlay.hide();
+                resolve(selected);
+            });
+
+            // Показываем оверлей
+            $overlay.show();
+        });
+    }
+
+    // Закрытие по клику на фон
+    $overlay.on('click', function(e) {
+        if (e.target === this) {
+            $overlay.hide();
+        }
+    });
+
+    // Функция применения темы
+    function applyTheme(isDark) {
+        const $menu = $('#vk-archive-menu');
+        const $dialog = $('#vk-video-selection-dialog');
+        if (isDark) {
+            $menu.addClass('vk-dark-theme');
+            $dialog.addClass('vk-dark-theme');
+        } else {
+            $menu.removeClass('vk-dark-theme');
+            $dialog.removeClass('vk-dark-theme');
+        }
+        // Сохраняем состояние
+        GM_setValue(DARK_THEME_KEY, isDark);
+        darkThemeEnabled = isDark;
+        // Обновляем чекбокс
+        $('#vk-theme-toggle').prop('checked', isDark);
+    }
 
     const menuHTML = `
         <div id="vk-archive-menu">
-            <h3>VK Images</h3>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <h3 style="margin:0;">VK Images</h3>
+                <span id="vk-archive-close" title="Закрыть">✖</span>
+            </div>
             <div style="margin-bottom: 8px; text-align: right;">
-                <a href="https://github.com/UncleWood1488/VKimages" target="_blank" style="color: #4a76a8; text-decoration: none; font-size: 12px;">📦 GitHub</a>
+                <a href="https://github.com/UncleWood1488/VKimages" target="_blank" style="color: var(--vk-btn-bg); text-decoration: none; font-size: 12px;">📦 GitHub</a>
             </div>
             <div class="token-status" id="vk-token-status">
                 ${accessToken ? '✅ Токен установлен' : '❌ Токен не задан'}
             </div>
 
-            <!-- Токен -->
             <div class="section">
-                <label>🔑 Токен доступа (права: messages, photos):</label>
+                <label>🔑 Токен доступа (права: messages, photos, video):</label>
                 <input type="password" id="vk-token-input" value="${accessToken}" placeholder="Вставьте токен" />
                 <div class="token-help">
                     ⚡ <a href="https://vkhost.github.io/" target="_blank">Получить токен</a> (выберите нужные права)
@@ -164,7 +441,6 @@
                 <button id="vk-clear-token">Очистить</button>
             </div>
 
-            <!-- Диалог -->
             <div class="section">
                 <h4>Диалог</h4>
                 <div class="field">
@@ -184,7 +460,6 @@
                 </div>
             </div>
 
-            <!-- Альбом -->
             <div class="section">
                 <h4>Альбом</h4>
                 <div class="field">
@@ -194,11 +469,29 @@
                 <button id="vk-fetch-album">Получить фото альбома</button>
             </div>
 
-            <!-- Общие настройки скачивания -->
+            <div class="section">
+                <h4>Видео</h4>
+                <div class="field">
+                    <label>Разрешение видео:</label>
+                    <select id="vk-video-quality">
+                        <option value="best">Максимальное</option>
+                        <option value="1080">1080p</option>
+                        <option value="720">720p</option>
+                        <option value="480">480p</option>
+                        <option value="360">360p</option>
+                        <option value="240">240p</option>
+                    </select>
+                </div>
+                <div class="checkbox-group">
+                    <label><input type="checkbox" id="vk-include-video-posts" /> Видео из репостов</label>
+                </div>
+                <button id="vk-download-videos">Скачать видео из диалога</button>
+            </div>
+
             <div class="section">
                 <h4>Настройки скачивания</h4>
                 <div class="checkbox-group">
-                    <label><input type="checkbox" id="vk-use-zip" checked /> Упаковать фото в ZIP-архив (параллельно, до 5 фото одновременно)</label>
+                    <label><input type="checkbox" id="vk-use-zip" checked /> Упаковать фото в ZIP-архив (разбивка по 1000 фото)</label>
                     <div class="warning" id="zip-warning" style="display:none;">⚠️ Скачивание по одному может быть заблокировано</div>
                 </div>
                 <div class="field">
@@ -212,6 +505,13 @@
                 <button id="vk-clear-log">Очистить лог</button>
             </div>
 
+            <div class="section">
+                <h4>Оформление</h4>
+                <div class="theme-toggle">
+                    <label><input type="checkbox" id="vk-theme-toggle" ${darkThemeEnabled ? 'checked' : ''} /> Тёмная тема</label>
+                </div>
+            </div>
+
             <div class="progress">
                 Найдено фото: <span id="vk-photo-count">0</span>
             </div>
@@ -220,8 +520,11 @@
     `;
 
     $('body').append(menuHTML);
+    $('body').append('<div id="vk-archive-toggle">📦</div>');
 
-    // Элементы интерфейса
+    const $menu = $('#vk-archive-menu');
+    const $toggle = $('#vk-archive-toggle');
+    const $close = $('#vk-archive-close');
     const $tokenStatus = $('#vk-token-status');
     const $tokenInput = $('#vk-token-input');
     const $saveToken = $('#vk-save-token');
@@ -242,11 +545,22 @@
     const $clearLog = $('#vk-clear-log');
     const $log = $('#vk-log');
     const $photoCount = $('#vk-photo-count');
+    const $videoQuality = $('#vk-video-quality');
+    const $includeVideoPosts = $('#vk-include-video-posts');
+    const $downloadVideosBtn = $('#vk-download-videos');
+    const $themeToggle = $('#vk-theme-toggle');
 
-    // Предупреждение для ZIP
-    $useZip.on('change', function() {
-        $zipWarning.toggle(!this.checked);
+    // Применяем сохранённую тему при загрузке
+    applyTheme(darkThemeEnabled);
+
+    // Обработчик переключения темы
+    $themeToggle.on('change', function() {
+        applyTheme($(this).prop('checked'));
     });
+
+    $toggle.on('click', () => $menu.toggle());
+    $close.on('click', () => $menu.hide());
+    $useZip.on('change', function() { $zipWarning.toggle(!this.checked); });
 
     function log(msg) {
         $log.append($('<div>').text(msg));
@@ -284,9 +598,8 @@
 
     $clearLog.on('click', () => $log.empty());
 
-    GM_registerMenuCommand('Показать/скрыть архиватор', () => $('#vk-archive-menu').toggle());
+    GM_registerMenuCommand('Показать/скрыть архиватор', () => $menu.toggle());
 
-    // ---------- Функции для работы с API ----------
     function apiCall(method, params) {
         return new Promise((resolve, reject) => {
             const url = `https://api.vk.com/method/${method}?${params}&access_token=${accessToken}&v=5.131`;
@@ -310,29 +623,15 @@
         });
     }
 
-    // ---------- Анализ диалога ----------
     $analyzeBtn.on('click', async function() {
-        if (!accessToken) {
-            log('Ошибка: нет токена');
-            return;
-        }
+        if (!accessToken) { log('Ошибка: нет токена'); return; }
         const peerIdRaw = $peerInput.val().trim();
         const peerId = parseInt(peerIdRaw.replace(/\D/g, ''));
-        if (isNaN(peerId)) {
-            log('Ошибка: некорректный Peer ID');
-            return;
-        }
+        if (isNaN(peerId)) { log('Ошибка: некорректный Peer ID'); return; }
 
         log('Анализ диалога...');
-        let totalMessages = 0;
-        let messagesWithPhotos = 0;
-        let totalPhotos = 0;
-        let totalDocs = 0;
-        let totalLinks = 0; // упрощённо: ссылки в тексте
-
-        let offset = 0;
-        const count = 200;
-        let total = null;
+        let totalMessages = 0, messagesWithPhotos = 0, totalPhotos = 0, totalDocs = 0, totalLinks = 0;
+        let offset = 0, count = 200, total = null;
 
         try {
             while (total === null || offset < total) {
@@ -340,7 +639,6 @@
                 if (total === null) total = resp.count;
                 const items = resp.items;
                 totalMessages += items.length;
-
                 items.forEach(msg => {
                     if (msg.attachments) {
                         msg.attachments.forEach(att => {
@@ -349,10 +647,8 @@
                         });
                         if (msg.attachments.some(att => att.type === 'photo')) messagesWithPhotos++;
                     }
-                    // грубая оценка ссылок
                     if (msg.text && msg.text.match(/https?:\/\//)) totalLinks++;
                 });
-
                 offset += count;
                 log(`Проанализировано ${totalMessages} из ${total} сообщений...`);
             }
@@ -363,40 +659,22 @@
             log(`Всего документов: ${totalDocs}`);
             log(`Сообщений со ссылками: ${totalLinks}`);
             log('======================');
-        } catch (e) {
-            log('Ошибка при анализе: ' + e);
-        }
+        } catch (e) { log('Ошибка при анализе: ' + e); }
     });
 
-    // ---------- Получение фото из альбома ----------
     $fetchAlbumBtn.on('click', async function() {
-        if (!accessToken) {
-            log('Ошибка: нет токена');
-            return;
-        }
+        if (!accessToken) { log('Ошибка: нет токена'); return; }
         const url = $albumUrl.val().trim();
-        if (!url) {
-            log('Введите ссылку на альбом');
-            return;
-        }
+        if (!url) { log('Введите ссылку на альбом'); return; }
 
-        // Парсим owner_id и album_id из URL
         let match = url.match(/album([\-0-9]+)_([0-9]+)/);
-        if (!match) {
-            log('Не удалось распознать альбом. Формат: https://vk.com/album-123_456');
-            return;
-        }
-        const owner_id = parseInt(match[1]);
-        const album_id = parseInt(match[2]);
+        if (!match) { log('Не удалось распознать альбом. Формат: https://vk.com/album-123_456'); return; }
+        const owner_id = parseInt(match[1]), album_id = parseInt(match[2]);
 
         log(`Загружаем фото из альбома: owner_id=${owner_id}, album_id=${album_id}`);
-
         try {
             const photos = [];
-            let offset = 0;
-            const count = 1000; // макс 1000 за запрос
-            let total = null;
-
+            let offset = 0, count = 1000, total = null;
             while (total === null || offset < total) {
                 const resp = await apiCall('photos.get', `owner_id=${owner_id}&album_id=${album_id}&offset=${offset}&count=${count}`);
                 if (total === null) total = resp.count;
@@ -408,45 +686,25 @@
                 offset += items.length;
                 log(`Загружено ${photos.length} из ${total} фото...`);
             }
-
             log(`Найдено фото в альбоме: ${photos.length}`);
             $photoCount.text(photos.length);
-
-            // Спрашиваем, скачивать ли
             if (photos.length > 0) {
                 const useZip = $useZip.prop('checked');
                 const start = parseInt($rangeStart.val()) || 0;
                 const end = parseInt($rangeEnd.val()) || 0;
                 const selectedPhotos = selectRange(photos, start, end);
                 log(`Выбрано для скачивания: ${selectedPhotos.length} фото`);
-
-                if (useZip) {
-                    await downloadPhotosAsZip(selectedPhotos);
-                } else {
-                    await downloadPhotosSequential(selectedPhotos);
-                }
-            } else {
-                log('Нет фото для скачивания');
-            }
-        } catch (e) {
-            log('Ошибка при загрузке альбома: ' + e);
-        }
+                if (useZip) await downloadPhotosAsZip(selectedPhotos);
+                else await downloadPhotosSequential(selectedPhotos);
+            } else { log('Нет фото для скачивания'); }
+        } catch (e) { log('Ошибка при загрузке альбома: ' + e); }
     });
 
-    // ---------- Основная функция для диалога (старт) ----------
     $startBtn.on('click', async function() {
-        if (!accessToken) {
-            log('Ошибка: нет токена');
-            return;
-        }
-
+        if (!accessToken) { log('Ошибка: нет токена'); return; }
         const peerIdRaw = $peerInput.val().trim();
         const peerId = parseInt(peerIdRaw.replace(/\D/g, ''));
-        if (isNaN(peerId)) {
-            log('Ошибка: некорректный Peer ID');
-            return;
-        }
-
+        if (isNaN(peerId)) { log('Ошибка: некорректный Peer ID'); return; }
         const includePosts = $includePosts.prop('checked');
         const saveTwitter = $saveTwitter.prop('checked');
         const saveHashtags = $saveHashtags.prop('checked');
@@ -454,18 +712,42 @@
         const useZip = $useZip.prop('checked');
         const start = parseInt($rangeStart.val()) || 0;
         const end = parseInt($rangeEnd.val()) || 0;
-
         log('Начинаем сбор сообщений...');
         await startArchiving(peerId, accessToken, includePosts, saveTwitter, saveHashtags, saveMentions, useZip, start, end);
     });
 
-    // ---------- Функция архивации диалога ----------
-    async function startArchiving(peerId, token, includePosts, saveTwitter, saveHashtags, saveMentions, useZip, rangeStart, rangeEnd) {
-        let allMessages = [];
-        let offset = 0;
-        const count = 200;
-        let total = null;
+    // Обработчик для видео с выбором
+    $downloadVideosBtn.on('click', async function() {
+        if (!accessToken) { log('Ошибка: нет токена'); return; }
+        const peerIdRaw = $peerInput.val().trim();
+        const peerId = parseInt(peerIdRaw.replace(/\D/g, ''));
+        if (isNaN(peerId)) { log('Ошибка: некорректный Peer ID'); return; }
+        const includePosts = $includeVideoPosts.prop('checked');
+        const quality = $videoQuality.val();
 
+        log('Сбор видео из диалога...');
+        const videos = await collectVideosFromDialog(peerId, accessToken, includePosts);
+        if (videos.length === 0) {
+            log('Видео не найдены.');
+            return;
+        }
+        log(`Найдено видео: ${videos.length}`);
+
+        // Показываем диалог выбора
+        const selectedVideos = await showVideoSelectionDialog(videos, quality);
+        if (!selectedVideos || selectedVideos.length === 0) {
+            log('Выбор видео отменён или ничего не выбрано.');
+            return;
+        }
+        log(`Выбрано для скачивания: ${selectedVideos.length} видео`);
+
+        // Скачиваем выбранные
+        await downloadSelectedVideos(selectedVideos, quality);
+    });
+
+    // Функция сбора видео из диалога (возвращает массив объектов video)
+    async function collectVideosFromDialog(peerId, token, includePosts) {
+        let allMessages = [], offset = 0, count = 200, total = null;
         try {
             while (total === null || offset < total) {
                 const resp = await apiCall('messages.getHistory', `peer_id=${peerId}&offset=${offset}&count=${count}`);
@@ -475,98 +757,130 @@
                 log(`Загружено ${allMessages.length} из ${total} сообщений...`);
             }
         } catch (e) {
-            log('Ошибка при загрузке: ' + e);
-            return;
+            log('Ошибка при загрузке сообщений: ' + e);
+            return [];
         }
 
-        log('Обработка сообщений...');
-        const photos = [];
-        const textItems = [];
-
+        const videos = [];
         allMessages.forEach(msg => {
-            const msgText = msg.text || '';
             const attachments = msg.attachments || [];
-
-            const textInfo = {
-                id: msg.id,
-                from_id: msg.from_id,
-                date: msg.date,
-                text: msgText,
-                twitter: [],
-                hashtags: [],
-                mentions: []
-            };
-
-            if (saveTwitter) textInfo.twitter = extractTwitterUrls(msgText);
-            if (saveHashtags) textInfo.hashtags = extractHashtags(msgText);
-            if (saveMentions) textInfo.mentions = extractMentions(msgText);
-
-            if (textInfo.twitter.length || textInfo.hashtags.length || textInfo.mentions.length) {
-                textItems.push(textInfo);
-            }
-
             attachments.forEach(att => {
-                if (att.type === 'photo') {
-                    const url = getMaxSizePhotoUrl(att.photo);
-                    if (url) photos.push(url);
-                } else if (att.type === 'doc' && att.doc.type === 4) {
-                    if (att.doc.url) photos.push(att.doc.url);
+                if (att.type === 'video') {
+                    videos.push(att.video);
                 } else if (att.type === 'wall' && includePosts) {
                     const postAttachments = att.wall.attachments || [];
                     postAttachments.forEach(postAtt => {
-                        if (postAtt.type === 'photo') {
-                            const url = getMaxSizePhotoUrl(postAtt.photo);
-                            if (url) photos.push(url);
-                        } else if (postAtt.type === 'doc' && postAtt.doc.type === 4) {
-                            if (postAtt.doc.url) photos.push(postAtt.doc.url);
+                        if (postAtt.type === 'video') {
+                            videos.push(postAtt.video);
                         }
                     });
                 }
             });
         });
-
-        log(`Найдено фото: ${photos.length}`);
-        $photoCount.text(photos.length);
-
-        if (textItems.length) {
-            log(`Найдено сообщений с текстовыми элементами: ${textItems.length}`);
-        }
-
-        // Применяем диапазон
-        const selectedPhotos = selectRange(photos, rangeStart, rangeEnd);
-        log(`Выбрано для скачивания: ${selectedPhotos.length} фото`);
-
-        // Скачивание фото
-        if (selectedPhotos.length > 0) {
-            if (useZip) {
-                log('Упаковка фото в ZIP-архив (параллельно)...');
-                await downloadPhotosAsZip(selectedPhotos);
-            } else {
-                log('Скачивание фото по одному...');
-                await downloadPhotosSequential(selectedPhotos);
-            }
-        } else {
-            log('Нет фото для скачивания');
-        }
-
-        // Сохранение текста
-        if (textItems.length > 0) {
-            saveTextItems(textItems);
-            log('Текстовые данные сохранены');
-        }
-
-        log('Архивация завершена!');
+        return videos;
     }
 
-    // Вспомогательная функция выбора диапазона
+    // Функция скачивания выбранных видео
+    async function downloadSelectedVideos(videos, quality) {
+        let successCount = 0;
+        for (let i = 0; i < videos.length; i++) {
+            const video = videos[i];
+            const downloadUrl = getVideoDownloadUrl(video, quality);
+            if (!downloadUrl) {
+                log(`[${i+1}/${videos.length}] Видео ${video.id} не имеет доступных форматов, пропускаем`);
+                continue;
+            }
+            const title = video.title || `video_${video.id}`;
+            const filename = `vk_video_${title.replace(/[^a-zA-Z0-9]/g, '_')}_${video.id}.mp4`;
+            log(`[${i+1}/${videos.length}] Скачиваем: ${title}`);
+            try {
+                await downloadSingleFile(downloadUrl, filename);
+                successCount++;
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            } catch (e) {
+                log(`[${i+1}/${videos.length}] Ошибка скачивания: ${e.message}`);
+            }
+        }
+        log(`Скачано видео: ${successCount} из ${videos.length}`);
+    }
+
+    // Получение ссылки на видео согласно выбранному качеству
+    function getVideoDownloadUrl(video, quality) {
+        const files = video.files;
+        if (!files) return null;
+
+        const qualities = ['1080', '720', '480', '360', '240'];
+        let selectedQuality = quality;
+
+        if (selectedQuality === 'best') {
+            for (const q of qualities) {
+                const key = 'mp4_' + q;
+                if (files[key]) return files[key];
+            }
+            if (files.mp4) return files.mp4;
+            if (files.flv) return files.flv;
+            return null;
+        } else {
+            const target = parseInt(selectedQuality);
+            const key = 'mp4_' + selectedQuality;
+            if (files[key]) return files[key];
+            const available = qualities.filter(q => files['mp4_' + q]).map(q => parseInt(q));
+            if (available.length === 0) {
+                if (files.mp4) return files.mp4;
+                if (files.flv) return files.flv;
+                return null;
+            }
+            available.sort((a,b) => b - a);
+            for (const q of available) {
+                if (q <= target) {
+                    return files['mp4_' + q];
+                }
+            }
+            const lowest = available[available.length - 1];
+            return files['mp4_' + lowest];
+        }
+    }
+
+    // Универсальная функция скачивания одного файла по URL
+    function downloadSingleFile(url, filename) {
+        return new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url: url,
+                responseType: 'blob',
+                onload: function(response) {
+                    if (response.status !== 200) {
+                        reject(new Error(`HTTP ${response.status}`));
+                        return;
+                    }
+                    const blob = response.response;
+                    const blobUrl = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = blobUrl;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(blobUrl);
+                    resolve();
+                },
+                onerror: function(err) {
+                    reject(new Error('Ошибка сети'));
+                },
+                ontimeout: function() {
+                    reject(new Error('Таймаут'));
+                }
+            });
+        });
+    }
+
     function selectRange(array, start, end) {
-        if (start <= 0 && end <= 0) return array; // все
-        const s = Math.max(1, start) - 1; // к индексу с 0
+        if (start <= 0 && end <= 0) return array;
+        const s = Math.max(1, start) - 1;
         const e = (end > 0) ? end : array.length;
         return array.slice(s, e);
     }
 
-    // ---------- Вспомогательные функции ----------
     function getMaxSizePhotoUrl(photo) {
         const sizes = photo.sizes;
         if (!sizes || sizes.length === 0) return null;
@@ -593,116 +907,125 @@
         return text.match(regex) || [];
     }
 
-    // Скачивание по одному (с задержкой)
     function downloadPhotosSequential(urls) {
         return new Promise((resolve) => {
             let index = 0;
             function next() {
-                if (index >= urls.length) {
-                    log('Все фото скачаны');
-                    resolve();
-                    return;
-                }
+                if (index >= urls.length) { log('Все фото скачаны'); resolve(); return; }
                 const url = urls[index];
                 const filename = `vk_photo_${Date.now()}_${index+1}.jpg`;
-
                 GM_xmlhttpRequest({
-                    method: 'GET',
-                    url: url,
-                    responseType: 'blob',
+                    method: 'GET', url: url, responseType: 'blob',
                     onload: function(response) {
                         const blob = response.response;
                         const blobUrl = URL.createObjectURL(blob);
                         const a = document.createElement('a');
-                        a.href = blobUrl;
-                        a.download = filename;
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
+                        a.href = blobUrl; a.download = filename;
+                        document.body.appendChild(a); a.click(); document.body.removeChild(a);
                         URL.revokeObjectURL(blobUrl);
                         log(`Скачано ${index+1}/${urls.length}`);
-                        index++;
-                        setTimeout(next, 500);
+                        index++; setTimeout(next, 500);
                     },
-                    onerror: function(err) {
-                        log(`Ошибка скачивания ${url}: ${err}`);
-                        index++;
-                        next();
-                    }
+                    onerror: function(err) { log(`Ошибка скачивания ${url}: ${err}`); index++; next(); }
                 });
             }
             next();
         });
     }
 
-    // Параллельное скачивание в ZIP (до 5 одновременно)
     async function downloadPhotosAsZip(urls) {
+        log('>>> Вход в downloadPhotosAsZip, urls.length = ' + urls.length);
+
         if (typeof JSZip === 'undefined') {
             log('❌ JSZip не загружен!');
             return;
         }
-        log('JSZip загружен, начинаем параллельную загрузку фото...');
+        log('✅ JSZip доступен, версия: ' + (JSZip.version || 'неизвестна'));
 
-        const zip = new JSZip();
-        const folder = zip.folder("vk_photos");
-        const concurrency = 5; // количество одновременных загрузок
-        let loaded = 0;
-        let failed = 0;
-
-        async function downloadOne(url, index) {
-            try {
-                log(`Загрузка фото ${index+1}/${urls.length}...`);
-                const blob = await fetchBlob(url);
-                if (blob.size === 0) throw new Error('Пустой blob');
-                let ext = 'jpg';
-                const match = url.match(/\.([a-zA-Z0-9]+)(\?|$)/);
-                if (match) ext = match[1];
-                const filename = `photo_${index+1}.${ext}`;
-                folder.file(filename, blob);
-                loaded++;
-                log(`✅ Фото ${index+1} добавлено (${blob.size} байт)`);
-            } catch (e) {
-                failed++;
-                log(`❌ Ошибка фото ${index+1}: ${e.message}`);
-            }
-        }
-
-        // Разбиваем на батчи по concurrency
-        for (let i = 0; i < urls.length; i += concurrency) {
-            const batch = urls.slice(i, i + concurrency);
-            const promises = batch.map((url, idx) => downloadOne(url, i + idx));
-            await Promise.all(promises); // ждём завершения текущей группы
-        }
-
-        if (loaded === 0) {
-            log('Нет загруженных фото. ZIP не создан.');
+        try {
+            const testZip = new JSZip();
+            testZip.file("test.txt", "Hello World");
+            log('✅ JSZip работает: файл добавлен');
+        } catch (e) {
+            log('❌ Ошибка при работе с JSZip: ' + e.message);
             return;
         }
 
-        log(`Загружено ${loaded} фото. Генерация ZIP...`);
-        try {
-            const content = await zip.generateAsync({type: 'blob'});
-            log(`ZIP сгенерирован, размер: ${content.size} байт`);
-            const blobUrl = URL.createObjectURL(content);
-            const a = document.createElement('a');
-            a.href = blobUrl;
-            a.download = `vk_photos_${Date.now()}.zip`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(blobUrl);
-            log('✅ ZIP-архив сохранён');
-        } catch (e) {
-            log('❌ Ошибка генерации ZIP: ' + e.message);
+        const MAX_PER_ZIP = 1000;
+        const totalChunks = Math.ceil(urls.length / MAX_PER_ZIP);
+        log(`Разбиваем ${urls.length} фото на ${totalChunks} архивов (по ${MAX_PER_ZIP} фото)`);
+
+        for (let chunk = 0; chunk < totalChunks; chunk++) {
+            const startIdx = chunk * MAX_PER_ZIP;
+            const endIdx = Math.min(startIdx + MAX_PER_ZIP, urls.length);
+            const chunkUrls = urls.slice(startIdx, endIdx);
+
+            log(`Архив ${chunk+1}/${totalChunks}: загружаем фото ${startIdx+1}–${endIdx}...`);
+
+            const zip = new JSZip();
+            const folder = zip.folder("vk_photos");
+            const concurrency = 5;
+            let loaded = 0;
+
+            async function downloadOne(url, idx) {
+                try {
+                    log(`  Загрузка фото ${idx+1}...`);
+                    const blob = await fetchBlob(url);
+                    if (blob.size === 0) throw new Error('Пустой blob');
+                    let ext = 'jpg';
+                    const match = url.match(/\.([a-zA-Z0-9]+)(\?|$)/);
+                    if (match) ext = match[1];
+                    const filename = `photo_${idx+1}.${ext}`;
+                    folder.file(filename, blob);
+                    loaded++;
+                    log(`  ✅ Фото ${idx+1} добавлено (${blob.size} байт)`);
+                } catch (e) {
+                    log(`  ❌ Ошибка фото ${idx+1}: ${e.message}`);
+                }
+            }
+
+            for (let i = 0; i < chunkUrls.length; i += concurrency) {
+                const batch = chunkUrls.slice(i, i + concurrency);
+                log(`  Пакетная загрузка ${i+1}–${Math.min(i+concurrency, chunkUrls.length)}...`);
+                const promises = batch.map((url, idx) => downloadOne(url, startIdx + i + idx));
+                await Promise.all(promises);
+            }
+
+            if (loaded === 0) {
+                log(`Архив ${chunk+1} пуст, пропускаем`);
+                continue;
+            }
+
+            log(`Архив ${chunk+1}: загружено ${loaded} фото. Генерируем ZIP...`);
+
+            try {
+                log('  Начало генерации...');
+                const content = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
+                log(`  ZIP сгенерирован, размер: ${content.size} байт, тип: ${content.type}`);
+
+                const blobUrl = URL.createObjectURL(content);
+                const a = document.createElement('a');
+                a.href = blobUrl;
+                a.download = `vk_photos_${Date.now()}_part${chunk+1}.zip`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(blobUrl);
+                log(`✅ Архив ${chunk+1} сохранён`);
+            } catch (e) {
+                log(`❌ Ошибка генерации архива ${chunk+1}: ${e.message}`);
+                console.error('Ошибка ZIP:', e);
+            }
+
+            await new Promise(resolve => setTimeout(resolve, 1000));
         }
+        log('Все архивы обработаны');
     }
 
     function fetchBlob(url) {
         return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
-                method: 'GET',
-                url: url,
-                responseType: 'blob',
+                method: 'GET', url: url, responseType: 'blob',
                 onload: (resp) => {
                     if (resp.status !== 200) {
                         reject(new Error(`HTTP ${resp.status}`));
@@ -725,15 +1048,11 @@
         const blob = new Blob([content], {type: 'application/json'});
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = url;
-        a.download = `vk_text_archive_${Date.now()}.json`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
+        a.href = url; a.download = `vk_text_archive_${Date.now()}.json`;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
         URL.revokeObjectURL(url);
     }
 
-    // Инициализация
     updateTokenStatus();
     $zipWarning.toggle(!$useZip.prop('checked'));
 })();
